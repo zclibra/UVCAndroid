@@ -8,6 +8,8 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Matrix;
+import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -63,6 +65,7 @@ public class MainActivity extends android.app.Activity {
     private CameraDevice cameraDevice;
     private CameraCaptureSession captureSession;
     private MediaRecorder mediaRecorder;
+    private String currentCameraId;
 
     private TextureView previewView;
     private VideoView playbackView;
@@ -83,6 +86,7 @@ public class MainActivity extends android.app.Activity {
 
         @Override
         public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
+            configurePreviewTransform(width, height);
         }
 
         @Override
@@ -365,6 +369,7 @@ public class MainActivity extends android.app.Activity {
                 return;
             }
             closeCamera();
+            currentCameraId = cameraId;
             cameraManager.openCamera(cameraId, new CameraDevice.StateCallback() {
                 @Override
                 public void onOpened(CameraDevice camera) {
@@ -417,6 +422,7 @@ public class MainActivity extends android.app.Activity {
                 return;
             }
             texture.setDefaultBufferSize(captureSize.getWidth(), captureSize.getHeight());
+            configurePreviewTransform(previewView.getWidth(), previewView.getHeight());
             Surface previewSurface = new Surface(texture);
             CaptureRequest.Builder builder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
             builder.addTarget(previewSurface);
@@ -455,6 +461,7 @@ public class MainActivity extends android.app.Activity {
                 return;
             }
             texture.setDefaultBufferSize(captureSize.getWidth(), captureSize.getHeight());
+            configurePreviewTransform(previewView.getWidth(), previewView.getHeight());
             Surface previewSurface = new Surface(texture);
             Surface recordingSurface = mediaRecorder.getSurface();
             CaptureRequest.Builder builder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
@@ -518,7 +525,67 @@ public class MainActivity extends android.app.Activity {
         mediaRecorder.setVideoFrameRate(30);
         mediaRecorder.setVideoSize(captureSize.getWidth(), captureSize.getHeight());
         mediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
+        mediaRecorder.setOrientationHint(getVideoOrientationHint());
         mediaRecorder.prepare();
+    }
+
+    private void configurePreviewTransform(int viewWidth, int viewHeight) {
+        if (viewWidth == 0 || viewHeight == 0) {
+            return;
+        }
+        int rotation = getWindowManager().getDefaultDisplay().getRotation();
+        Matrix matrix = new Matrix();
+        RectF viewRect = new RectF(0, 0, viewWidth, viewHeight);
+        RectF bufferRect = new RectF(0, 0, captureSize.getHeight(), captureSize.getWidth());
+        float centerX = viewRect.centerX();
+        float centerY = viewRect.centerY();
+
+        if (rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270) {
+            bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY());
+            matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL);
+            float scale = Math.max(
+                    (float) viewHeight / captureSize.getHeight(),
+                    (float) viewWidth / captureSize.getWidth()
+            );
+            matrix.postScale(scale, scale, centerX, centerY);
+            matrix.postRotate(90 * (rotation - 2), centerX, centerY);
+        } else if (rotation == Surface.ROTATION_180) {
+            matrix.postRotate(180, centerX, centerY);
+        }
+        previewView.setTransform(matrix);
+    }
+
+    private int getVideoOrientationHint() {
+        if (currentCameraId == null) {
+            return 0;
+        }
+        try {
+            CameraCharacteristics characteristics = cameraManager.getCameraCharacteristics(currentCameraId);
+            Integer sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
+            Integer lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING);
+            int deviceDegrees = displayRotationToDegrees(getWindowManager().getDefaultDisplay().getRotation());
+            int sensorDegrees = sensorOrientation == null ? 0 : sensorOrientation;
+            if (lensFacing != null && lensFacing == CameraCharacteristics.LENS_FACING_FRONT) {
+                return (sensorDegrees + deviceDegrees) % 360;
+            }
+            return (sensorDegrees - deviceDegrees + 360) % 360;
+        } catch (CameraAccessException e) {
+            return 0;
+        }
+    }
+
+    private int displayRotationToDegrees(int rotation) {
+        switch (rotation) {
+            case Surface.ROTATION_90:
+                return 90;
+            case Surface.ROTATION_180:
+                return 180;
+            case Surface.ROTATION_270:
+                return 270;
+            case Surface.ROTATION_0:
+            default:
+                return 0;
+        }
     }
 
     private File recordingDirectory() {
@@ -580,6 +647,7 @@ public class MainActivity extends android.app.Activity {
             cameraDevice.close();
             cameraDevice = null;
         }
+        currentCameraId = null;
         releaseRecorder();
     }
 
