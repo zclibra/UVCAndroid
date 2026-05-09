@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- USB video class: 0x0e. This keeps attach events broad for standard UVC cameras. -->
+    <usb-device class="14" />
+</resources>
